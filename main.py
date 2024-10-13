@@ -10,23 +10,40 @@ MOMM_MONTH_DAYS = np.array([31, 28.24, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
 
 logger = logging.getLogger(__name__)
 
-def read_data(file_path):
+def read_data(file_path, excel_file, sheet_name='1. Inputs Setup'):
+    df_excel = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+    
+    # Extract start and end times from Q7 and Q8 (indices 16, 17)
+    start_time = df_excel.iloc[6, 16]  # Q7
+    end_time = df_excel.iloc[7, 16]    # Q8
+    print(f"starttime - {start_time}, endtime - {end_time}")
+
+    # Convert them to datetime objects if needed
+    start_time = pd.to_datetime(start_time)
+    end_time = pd.to_datetime(end_time)
+
+    # Step 2: Read the text file and extract relevant information
     with open(file_path, 'r', encoding='latin1') as file:
         lines = file.readlines()
-        start_index = next(i for i, line in enumerate(lines) if 'Date/Time' in line)
+
         # Extract Latitude, Longitude, and Elevation
+        start_index = next(i for i, line in enumerate(lines) if 'Date/Time' in line)
         latitude_line = next(i for i, line in enumerate(lines) if 'Latitude' in line)
         longitude_line = next(i for i, line in enumerate(lines) if 'Longitude' in line)
         elevation_line = next(i for i, line in enumerate(lines) if 'Elevation' in line)
+
         latitude = float(lines[latitude_line].split('=')[1].strip())
         longitude = float(lines[longitude_line].split('=')[1].strip())
         elevation = float(lines[elevation_line].split('=')[1].strip().split()[0])
+
+    # Step 3: Load the data from the text file
     data = pd.read_csv(file_path, sep='\t', skiprows=start_index, parse_dates=['Date/Time'], encoding='latin1')
-    # Add Latitude, Longitude, and Elevation as columns
-    data['Latitude'] = latitude
-    data['Longitude'] = longitude
-    data['Elevation'] = elevation
-    return data
+
+    # Step 4: Filter the data based on the date range
+    mask = (data['Date/Time'] >= start_time) & (data['Date/Time'] <= end_time)
+    filtered_data = data[mask]
+
+    return filtered_data, latitude, longitude, elevation
 
 def calculate_drr(series):
     valid_points = (series != 9999).sum()
@@ -36,7 +53,7 @@ def calculate_completion_factor(valid_data_points):
     if len(valid_data_points) != 12:
         # TODO - In this case CF should be zero, so return 0 instead raising ValueError
         return 0
-        # raise ValueError("Data doesn't have one year of data")
+        raise ValueError("Data doesn't have one year of data")
 
     days_of_valid_data = valid_data_points / 24
     return np.where(days_of_valid_data >= MOMM_MONTH_DAYS, 1, days_of_valid_data / MOMM_MONTH_DAYS)
@@ -50,7 +67,7 @@ def calculate_momm(valid_series, valid_months):
 
     # Calculate the completion factor
     cf = calculate_completion_factor(valid_series.groupby(valid_months).count())
-
+    
     # Ensure the completion factor is also reindexed to match 12 months
     cf = pd.Series(cf).reindex(range(1, 13), fill_value=0)
 
@@ -125,51 +142,69 @@ def get_lat_long_elev(lat_input=None, lon_input=None, elev_input=None, excel_fil
                 }
                 return result['Sheet Number']
 
+def read_folders_from_excel(excel_file, sheet_name='1. Inputs Setup'):
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+
+    print(df.iloc[8:20, 6:12]) 
+
+    folders = df.iloc[9:17, 7].values 
+    read_flags = df.iloc[9:17, 10].values
+
+    valid_folders = [
+        folder for folder, flag in zip(folders, read_flags)
+        if isinstance(folder, str) and isinstance(flag, str)
+        and folder.strip() 
+        and flag.strip().lower() == 'yes'
+    ]
+
+    return valid_folders
+
+
 def main():
-    # Specify the path to the folder containing the txt files
-    folder_path = 'TXT FILES'
     excel_path = 'WindLab_Inputs.xlsx'
+    valid_folders = read_folders_from_excel(excel_path)
+    print(f"Valid Folders - {valid_folders}")
+    for folder_path in valid_folders:
+        # Check if the folder exists before processing
+        if not os.path.exists(folder_path):
+            print(f"Folder not found: {folder_path}")
+            continue
+        
+        txt_files = [f for f in os.listdir(folder_path) if f.endswith('.txt')]
 
-    txt_files = [f for f in os.listdir(folder_path) if f.endswith('.txt')]
+        for file in txt_files:
+            file_path = os.path.join(folder_path, file)
+            data, latitude, longitude, elevation = read_data(file_path, excel_path)
+            results = process_data(data)
 
-    for file in txt_files:
-        file_path = os.path.join(folder_path, file)
-        data = read_data(file_path)
-        results = process_data(data)
+            df = pd.DataFrame.from_dict(results, orient='index')
+            df.index.name = 'Data Channel'
 
-        df = pd.DataFrame.from_dict(results, orient='index')
-        df.index.name = 'Data Channel'
+            # Remove rows with index starting with 'Unnamed'
+            df = df[~df.index.str.startswith('Unnamed')]
 
-        # Remove rows with index starting with 'Unnamed'
-        df = df[~df.index.str.startswith('Unnamed')]
+            heights = extract_heights(df)
+            df['Heights'] = heights.values
 
-        heights = extract_heights(df)
-        df['Heights'] = heights.values
+            # Reorder columns to match the existing file structure
+            df = df[['Heights', 'DRR', 'Mean', 'MOMM', 'Min', 'Max']]
 
-        #TODO - Remove brackets from every Data Channel row
-        # df = remove_brackets(df)
+            # Get the matching sheet number
+            sheet_number = get_lat_long_elev(lat_input=latitude, lon_input=longitude, elev_input=elevation)
 
-        # Reorder columns to match the existing file structure
-        df = df[['Heights', 'DRR', 'Mean', 'MOMM', 'Min', 'Max']]
- 
-        lat = data['Latitude'].iloc[0]  
-        long = data['Longitude'].iloc[0]
-        elev = data['Elevation'].iloc[0]
-        # Get the matching sheet number
-        sheet_number = get_lat_long_elev(lat_input=lat, lon_input=long, elev_input=elev)
+            if sheet_number is not None:
+                print(f"Matching sheet number for Latitude: {latitude}, Longitude: {longitude}, Elevation: {elevation} is Sheet: {sheet_number}")
+            else:
+                print(f"No matching sheet found for Latitude: {latitude}, Longitude: {longitude}, Elevation: {elevation}")
+            
+            # Specify the path to the output Excel file
+            output_file = 'WindLab_Inputs.xlsx'
 
-        if sheet_number is not None:
-            print(f"Matching sheet number for Latitude: {lat}, Longitude: {long}, Elevation: {elev} is Sheet: {sheet_number}")
-        else:
-            print(f"No matching sheet found for Latitude: {lat}, Longitude: {long}, Elevation: {elev}")
-        # Specify the path to the output Excel file
-        output_file = 'WindLab_Inputs.xlsx'
+            # Write new data starting from row 15, column M
+            with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=False, index=True)
 
-        # Write new data starting from row 15, column M
-        with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-            df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=False, index=True)
-
-        print(f"Data has been written to {output_file}")
+            print(f"Data has been written to {output_file}")
 
 if __name__ == "__main__":
     main()
