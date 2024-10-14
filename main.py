@@ -82,15 +82,31 @@ def calculate_momm(valid_series, valid_months):
     # Now perform the weighted sum calculation
     return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 2)
 
-def process_column(series, date_series):
+def process_processed_column(series, date_series, data, current_col_name):
+
+    # Find the index of the current column in the DataFrame's columns
+    col_idx = data.columns.get_loc(current_col_name)
+
+    # Check if there is a next column in the DataFrame and if it contains 'flags' in its name
+    if col_idx < len(data.columns) - 1:
+        next_col_name = data.columns[col_idx + 1]
+        if 'flags' in next_col_name.lower():
+            next_col_values = data[next_col_name]
+
+            # Iterate through the rows of both the current series and the next column
+            for idx, (current_value, next_value) in enumerate(zip(series, next_col_values)):
+                # Check if the value in the next column (flag column) is non-empty or non-NaN
+                if pd.notna(next_value) and next_value != '':
+                    series.iloc[idx] = 9999
+
+    # Process the current column (unchanged logic from your original code)
     series = pd.to_numeric(series, errors='coerce')  # Convert non-numeric to NaN
-    valid_mask = series != 9999   # Omit rows having values 9999
+    valid_mask = series != 9999
     
     valid_series = series[valid_mask]
     valid_months = date_series[valid_mask].dt.month
     
     if valid_series.empty:
-        # Return NaN or 0 for all calculations if there's no valid data
         return {
             'DRR': 0,
             'Mean': 0,
@@ -107,12 +123,46 @@ def process_column(series, date_series):
         'Max': round(valid_series.max(), 3)
     }
 
-def process_data(data):
-    process_func = partial(process_column, date_series=data['Date/Time'])
+def process_column(series, date_series, data, current_col_name):
+    series = pd.to_numeric(series, errors='coerce')  # Convert non-numeric to NaN
+    valid_mask = series != 9999
+    
+    valid_series = series[valid_mask]
+    valid_months = date_series[valid_mask].dt.month
+    
+    if valid_series.empty:
+        return {
+            'DRR': 0,
+            'Mean': 0,
+            'MOMM': 0,
+            'Min': 0,
+            'Max': 0
+        }
+
+    return {
+        'DRR': calculate_drr(valid_series),
+        'Mean': round(valid_series.mean(), 3),
+        'MOMM': calculate_momm(valid_series, valid_months),
+        'Min': round(valid_series.min(), 3),
+        'Max': round(valid_series.max(), 3)
+    }
+
+def process_data(data, data_type):
+    # Partial function with date_series as the first argument
+    if data_type == 'RAW':
+        process_func = partial(process_column, date_series=data['Date/Time'], data=data)
+    elif data_type == 'PROCESSED':
+        process_func = partial(process_processed_column, date_series=data['Date/Time'], data=data)
+
     # Filter out columns that include 'Flag' in their name
     filtered_columns = [col for col in data.columns if 'flags' not in col and col != 'Date/Time' and col not in ['Latitude', 'Longitude', 'Elevation']]
-    results = {col: process_func(data[col]) for col in filtered_columns}
+
+    # Apply process_func to each column and pass its name as an argument
+    results = {col: process_func(data[col], current_col_name=col) for col in filtered_columns}
+
     return results
+
+
 
 def extract_heights(df):
     index_as_str = df.index.astype(str)
@@ -182,19 +232,28 @@ def main():
         for file in txt_files:
             file_path = os.path.join(folder_path, file)
             data, latitude, longitude, elevation = read_data(file_path, excel_path)
-            results = process_data(data)
+            raw_results = process_data(data, 'RAW')
+            processed_results = process_data(data, 'PROCESSED')
+            
 
-            df = pd.DataFrame.from_dict(results, orient='index')
+            df = pd.DataFrame.from_dict(raw_results, orient='index')
+            p_df = pd.DataFrame.from_dict(processed_results, orient='index')
             df.index.name = 'Data Channel'
+            p_df.index.name = 'Data Channel'
 
             # Remove rows with index starting with 'Unnamed'
             df = df[~df.index.str.startswith('Unnamed')]
+            p_df = p_df[~p_df.index.str.startswith('Unnamed')]
 
             heights = extract_heights(df)
+            p_heights = extract_heights(p_df)
             df['Heights'] = heights.values
+            p_df['Heights'] = p_heights.values
+            
 
             # Reorder columns to match the existing file structure
             df = df[['Heights', 'DRR', 'Mean', 'MOMM', 'Min', 'Max']]
+            p_df = p_df[['Heights', 'DRR', 'Mean', 'MOMM', 'Min', 'Max']]
 
             # Get the matching sheet number
             sheet_number = get_lat_long_elev(lat_input=latitude, lon_input=longitude, elev_input=elevation)
@@ -211,6 +270,7 @@ def main():
             print("Writing data into output file - ", output_file)
             with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
                 df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=True, index=True)
+                p_df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=3, header=True, index=True)
 
             print(f"Data has been written to {output_file}")
     end_time = time.time()
