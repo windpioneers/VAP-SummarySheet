@@ -5,6 +5,7 @@ from functools import partial
 import os
 import re
 from openpyxl import load_workbook
+import time
 
 MOMM_MONTH_DAYS = np.array([31, 28.24, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
 
@@ -37,9 +38,11 @@ def read_data(file_path, excel_file, sheet_name='1. Inputs Setup'):
         elevation = float(lines[elevation_line].split('=')[1].strip().split()[0])
 
     # Step 3: Load the data from the text file
+    print("Reading Data from txt file..!!")
     data = pd.read_csv(file_path, sep='\t', skiprows=start_index, parse_dates=['Date/Time'], encoding='latin1')
 
     # Step 4: Filter the data based on the date range
+    print("Filtering data for the given date range ", start_time, "-", end_time)
     mask = (data['Date/Time'] >= start_time) & (data['Date/Time'] <= end_time)
     filtered_data = data[mask]
 
@@ -143,9 +146,7 @@ def get_lat_long_elev(lat_input=None, lon_input=None, elev_input=None, excel_fil
                 return result['Sheet Number']
 
 def read_folders_from_excel(excel_file, sheet_name='1. Inputs Setup'):
-    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
-
-    print(df.iloc[8:20, 6:12]) 
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None) 
 
     folders = df.iloc[9:17, 7].values 
     read_flags = df.iloc[9:17, 10].values
@@ -161,6 +162,7 @@ def read_folders_from_excel(excel_file, sheet_name='1. Inputs Setup'):
 
 
 def main():
+    start_time = time.time()
     excel_path = 'WindLab_Inputs.xlsx'
     valid_folders = read_folders_from_excel(excel_path)
     print(f"Valid Folders - {valid_folders}")
@@ -205,6 +207,10 @@ def main():
                 df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=False, index=True)
 
             print(f"Data has been written to {output_file}")
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+
+    print(f"Total execution time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
