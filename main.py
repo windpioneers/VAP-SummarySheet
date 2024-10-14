@@ -20,14 +20,19 @@ def read_data(file_path, excel_file, sheet_name='1. Inputs Setup'):
     print(f"starttime - {start_time}, endtime - {end_time}")
 
     # Convert them to datetime objects if needed
-    start_time = pd.to_datetime(start_time)
-    end_time = pd.to_datetime(end_time)
+    if pd.notna(start_time):
+        start_time = pd.to_datetime(start_time)
+    else:
+        start_time = pd.to_datetime('1900-01-01')  # Default to earliest possible date if cell is empty
 
-    # Step 2: Read the text file and extract relevant information
+    if pd.notna(end_time):
+        end_time = pd.to_datetime(end_time)
+    else:
+        end_time = pd.to_datetime('2100-01-01')  # Default to latest possible date if cell is empty
+
     with open(file_path, 'r', encoding='latin1') as file:
         lines = file.readlines()
 
-        # Extract Latitude, Longitude, and Elevation
         start_index = next(i for i, line in enumerate(lines) if 'Date/Time' in line)
         latitude_line = next(i for i, line in enumerate(lines) if 'Latitude' in line)
         longitude_line = next(i for i, line in enumerate(lines) if 'Longitude' in line)
@@ -37,13 +42,11 @@ def read_data(file_path, excel_file, sheet_name='1. Inputs Setup'):
         longitude = float(lines[longitude_line].split('=')[1].strip())
         elevation = float(lines[elevation_line].split('=')[1].strip().split()[0])
 
-    # Step 3: Load the data from the text file
     print("Reading Data from txt file..!!")
     data = pd.read_csv(file_path, sep='\t', skiprows=start_index, parse_dates=['Date/Time'], encoding='latin1')
 
-    # Step 4: Filter the data based on the date range
     print("Filtering data for the given date range ", start_time, "-", end_time)
-    mask = (data['Date/Time'] >= start_time) & (data['Date/Time'] <= end_time)
+    mask = (data['Date/Time'] >= start_time) & (data['Date/Time'] <= end_time) if pd.notna(start_time) and pd.notna(end_time) else True
     filtered_data = data[mask]
 
     return filtered_data, latitude, longitude, elevation
@@ -54,14 +57,14 @@ def calculate_drr(series):
 
 def calculate_completion_factor(valid_data_points):
     if len(valid_data_points) != 12:
-        # TODO - In this case CF should be zero, so return 0 instead raising ValueError
-        return 0
-        raise ValueError("Data doesn't have one year of data")
+        return np.zeros(12)
 
     days_of_valid_data = valid_data_points / 24
     return np.where(days_of_valid_data >= MOMM_MONTH_DAYS, 1, days_of_valid_data / MOMM_MONTH_DAYS)
 
 def calculate_momm(valid_series, valid_months):
+
+
     # Group by month and calculate the mean for each month
     monthly_means = valid_series.groupby(valid_months).mean()
 
@@ -74,12 +77,14 @@ def calculate_momm(valid_series, valid_months):
     # Ensure the completion factor is also reindexed to match 12 months
     cf = pd.Series(cf).reindex(range(1, 13), fill_value=0)
 
+    if cf.sum() == 0:
+        return round(valid_series.mean(), 3)
     # Now perform the weighted sum calculation
     return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 2)
 
 def process_column(series, date_series):
     series = pd.to_numeric(series, errors='coerce')  # Convert non-numeric to NaN
-    valid_mask = series.notna() & (series != 9999)   # Exclude NaN and invalid values (9999)
+    valid_mask = series != 9999   # Omit rows having values 9999
     
     valid_series = series[valid_mask]
     valid_months = date_series[valid_mask].dt.month
@@ -95,11 +100,11 @@ def process_column(series, date_series):
         }
 
     return {
-        'DRR': calculate_drr(series),
-        'Mean': round(valid_series.mean(), 2),
+        'DRR': calculate_drr(valid_series),
+        'Mean': round(valid_series.mean(), 3),
         'MOMM': calculate_momm(valid_series, valid_months),
-        'Min': round(valid_series.min(), 2),
-        'Max': round(valid_series.max(), 2)
+        'Min': round(valid_series.min(), 3),
+        'Max': round(valid_series.max(), 3)
     }
 
 def process_data(data):
@@ -203,8 +208,9 @@ def main():
             output_file = 'WindLab_Inputs.xlsx'
 
             # Write new data starting from row 15, column M
+            print("Writing data into output file - ", output_file)
             with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=False, index=True)
+                df.to_excel(writer, sheet_name=sheet_number, startrow=14, startcol=12, header=True, index=True)
 
             print(f"Data has been written to {output_file}")
     end_time = time.time()
