@@ -54,35 +54,59 @@ def read_data(file_path, excel_file, sheet_name='1. Inputs Setup'):
 def calculate_drr(series):
     valid_points = (series != 9999).sum()
     return round((valid_points / len(series)) * 100, 2)
+    
+    
 
-def calculate_completion_factor(valid_data_points):
-    if len(valid_data_points) != 12:
-        return np.zeros(12)
+def calculate_completeness_factor(valid_series, valid_months, time_steps_per_day=144):
+    # Calculate the total number of valid data points for each month
+    monthly_data_points = valid_series.groupby(valid_months).count()
 
-    days_of_valid_data = valid_data_points / 24
-    return np.where(days_of_valid_data >= MOMM_MONTH_DAYS, 1, days_of_valid_data / MOMM_MONTH_DAYS)
+    # Define the number of days for each month (approximate average)
+    days_in_month = {
+        1: 31,   
+        2: 28.24,
+        3: 31,   
+        4: 30,   
+        5: 31,   
+        6: 30,   
+        7: 31,   
+        8: 31,   
+        9: 30,   
+        10: 31,  
+        11: 30,  
+        12: 31   
+    }
+
+    # Initialize an array to store the completeness factors for all 12 months
+    completeness_factors = np.ones(12)
+
+    # Loop through each month and calculate the completeness factor
+    for month, N_i in monthly_data_points.items():
+        # Get the number of days in the month
+        psi_i = days_in_month.get(month, 30)  # Default to 30 days if month not found
+
+        # Calculate the denominator (n * ψ_i)
+        denominator = time_steps_per_day * psi_i
+
+        # Calculate the completeness factor for the month
+        completeness_factor = min(N_i / denominator, 1)
+
+        # Store the result in the corresponding index (month - 1 since index is 0-based)
+        completeness_factors[month - 1] = completeness_factor
+
+    return completeness_factors
 
 def calculate_momm(valid_series, valid_months):
-
-
-    # Group by month and calculate the mean for each month
-    monthly_means = valid_series.groupby(valid_months).mean()
-
-    # Convert the result to a pandas Series and reindex it to ensure all 12 months are included
-    monthly_means = monthly_means.reindex(range(1, 13), fill_value=0)  # Fill missing months with 0
-
-    # Calculate the completion factor
-    cf = calculate_completion_factor(valid_series.groupby(valid_months).count())
-    
-    # Ensure the completion factor is also reindexed to match 12 months
-    cf = pd.Series(cf).reindex(range(1, 13), fill_value=0)
-
+    cf = calculate_completeness_factor(valid_series, valid_months)
     if cf.sum() == 0:
         return round(valid_series.mean(), 3)
-    # Now perform the weighted sum calculation
-    return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 2)
+    monthly_means = valid_series.groupby(valid_months).mean()
+    return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 3)
 
 def process_processed_column(series, date_series, data, current_col_name):
+
+    # Make a copy of the series to avoid the warning
+    series = series.copy()
 
     # Find the index of the current column in the DataFrame's columns
     col_idx = data.columns.get_loc(current_col_name)
@@ -97,6 +121,7 @@ def process_processed_column(series, date_series, data, current_col_name):
             for idx, (current_value, next_value) in enumerate(zip(series, next_col_values)):
                 # Check if the value in the next column (flag column) is non-empty or non-NaN
                 if pd.notna(next_value) and next_value != '':
+                    # Modify the copied series
                     series.iloc[idx] = 9999
 
     # Process the current column (unchanged logic from your original code)
@@ -116,7 +141,7 @@ def process_processed_column(series, date_series, data, current_col_name):
         }
 
     return {
-        'DRR': calculate_drr(valid_series),
+        'DRR': calculate_drr(series),
         'Mean': round(valid_series.mean(), 3),
         'MOMM': calculate_momm(valid_series, valid_months),
         'Min': round(valid_series.min(), 3),
@@ -140,7 +165,7 @@ def process_column(series, date_series, data, current_col_name):
         }
 
     return {
-        'DRR': calculate_drr(valid_series),
+        'DRR': calculate_drr(series),
         'Mean': round(valid_series.mean(), 3),
         'MOMM': calculate_momm(valid_series, valid_months),
         'Min': round(valid_series.min(), 3),
@@ -176,10 +201,9 @@ def remove_brackets(df):
         df[col] = df[col].map(lambda x: re.sub(r'\s*\[.*?\]', '', str(x)) if isinstance(x, str) else x)
     return df
 
-def get_lat_long_elev(lat_input=None, lon_input=None, elev_input=None, excel_file='WindLab_Inputs.xlsx', sheet_name='1. Inputs Setup'):
-    # Load the Excel sheet
+def get_lat_long_elev(lat_input=None, lon_input=None, elev_input=None, excel_file='Inputs.xlsx', sheet_name='1. Inputs Setup'):
+    
     df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)  # Load with no header
-
     # Extract values starting from row 11 (index 10)
     latitudes = df.iloc[10:, 34].values  # AI is the 35th column (index 34)
     longitudes = df.iloc[10:, 35].values  # AJ is the 36th column (index 35)
@@ -218,7 +242,7 @@ def read_folders_from_excel(excel_file, sheet_name='1. Inputs Setup'):
 
 def main():
     start_time = time.time()
-    excel_path = 'WindLab_Inputs.xlsx'
+    excel_path = 'Inputs.xlsx'
     valid_folders = read_folders_from_excel(excel_path)
     print(f"Valid Folders - {valid_folders}")
     for folder_path in valid_folders:
@@ -264,7 +288,7 @@ def main():
                 print(f"No matching sheet found for Latitude: {latitude}, Longitude: {longitude}, Elevation: {elevation}")
             
             # Specify the path to the output Excel file
-            output_file = 'WindLab_Inputs.xlsx'
+            output_file = 'Inputs.xlsx'
 
             # Write new data starting from row 15, column M
             print("Writing data into output file - ", output_file)
