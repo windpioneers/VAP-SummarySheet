@@ -97,11 +97,24 @@ def calculate_completeness_factor(valid_series, valid_months, time_steps_per_day
     return completeness_factors
 
 def calculate_momm(valid_series, valid_months):
+    # Calculate completeness factor
     cf = calculate_completeness_factor(valid_series, valid_months)
+    
+    # If no valid data points, return 0 for MOMM
     if cf.sum() == 0:
         return round(valid_series.mean(), 3)
+    
+    # Calculate the monthly means
     monthly_means = valid_series.groupby(valid_months).mean()
-    return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 3)
+    
+    # Ensure the monthly_means has 12 values (one for each month), filling missing months with 0
+    monthly_means_full = pd.Series([0.0]*12, index=np.arange(1, 13))  # Index 1 to 12 for each month
+    monthly_means_full.update(monthly_means)  # Update with the actual monthly means
+
+    # Calculate MOMM
+    MOMM_MONTH_DAYS = np.array([31, 28.24, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])  # Days for each month
+    return round((monthly_means_full * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 3)
+
 
 def process_processed_column(series, date_series, data, current_col_name):
 
@@ -147,6 +160,8 @@ def process_processed_column(series, date_series, data, current_col_name):
         'Min': round(valid_series.min(), 3),
         'Max': round(valid_series.max(), 3)
     }
+
+
 
 def process_column(series, date_series, data, current_col_name):
     series = pd.to_numeric(series, errors='coerce')  # Convert non-numeric to NaN
