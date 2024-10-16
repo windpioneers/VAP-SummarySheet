@@ -75,23 +75,39 @@ def calculate_momm_more_one(valid_series, valid_months):
     return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 3)
 
 def calculate_momm(valid_series, valid_months, start_time, end_time):
-    if (end_time - start_time).days > 365:
+    # Convert the index of valid_series to datetime if it's not already
+    valid_series.index = pd.to_datetime(valid_series.index)
+
+    # Extract the first and last timestamps from the valid_series index
+    first_timestamp = valid_series.index.min()
+    last_timestamp = valid_series.index.max()
+
+    # Calculate the time difference in seconds between the first and last timestamps
+    time_difference = (last_timestamp - first_timestamp).total_seconds()
+
+    # One year in seconds (365 days)
+    one_year_seconds = 365 * 24 * 60 * 60  # 365 days in seconds
+
+    if time_difference > one_year_seconds:
+        # If the time difference is more than one year, handle it in calculate_momm_more_one
         return calculate_momm_more_one(valid_series, valid_months)
     else:
+        # Group data by month for a single year
         monthly_means = valid_series.groupby(valid_months).mean()
 
-        # Convert the result to a pandas Series and reindex it to ensure all 12 months are included
-        monthly_means = monthly_means.reindex(range(1, 13), fill_value=0)  # Fill missing months with 0
+        # Ensure that all 12 months are represented, filling missing months with 0
+        monthly_means = monthly_means.reindex(range(1, 13), fill_value=0)
 
-        # Calculate the completion factor
+        # Calculate the completion factor for the data
         cf = calculate_completion_factor(valid_series.groupby(valid_months).count())
 
-        # Ensure the completion factor is also reindexed to match 12 months
+        # Reindex the completion factor to match 12 months
         cf = pd.Series(cf).reindex(range(1, 13), fill_value=0)
 
         if cf.sum() == 0:
             return round(valid_series.mean(), 3)
-        # Now perform the weighted sum calculation
+
+        # Perform the weighted sum calculation for MOMM
         return round((monthly_means * MOMM_MONTH_DAYS * cf).sum() / (MOMM_MONTH_DAYS * cf).sum(), 3)
 
 
